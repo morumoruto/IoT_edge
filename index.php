@@ -2,37 +2,45 @@
 // index.php
 require 'db_config.php';
 
-// --- A. 人数修正処理 (POSTリクエスト時のみ実行) ---
-// センサの誤差で人数がズレた場合、手動で修正するためのロジック
+// --- A. POSTリクエスト処理 (データ修正用) ---
+
+// 1. 人数修正処理 (以前からある機能)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reset_count'])) {
     $new_count = (int)$_POST['reset_count'];
-    // 0未満にならないように調整
     if ($new_count < 0) $new_count = 0;
     
     $stmt = $pdo->prepare("UPDATE room_status SET current_count = :cnt WHERE id = 1");
     $stmt->execute([':cnt' => $new_count]);
     
-    // 処理後にリダイレクトして再読み込み（二重送信防止）
+    header("Location: index.php");
+    exit;
+}
+
+// 2. 【追加】本のリセット処理
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['reset_book_id'])) {
+    $book_id = (int)$_POST['reset_book_id'];
+    
+    // 指定された本(ID)のカウントを0に戻す
+    $stmt = $pdo->prepare("UPDATE books SET pickup_count = 0 WHERE id = :id");
+    $stmt->execute([':id' => $book_id]);
+
     header("Location: index.php");
     exit;
 }
 
 // --- B. データ取得処理 ---
 
-// 1. 環境情報の取得 (最新の1件)
-// env_logs テーブル: temperature(FLOAT), humidity(FLOAT)
+// 1. 環境情報の取得
 $stmt_env = $pdo->query("SELECT temperature, humidity, created_at FROM env_logs ORDER BY id DESC LIMIT 1");
 $env = $stmt_env->fetch();
 
 // 2. 現在の人数の取得
-// room_status テーブル: current_count(INT)
 $stmt_ppl = $pdo->query("SELECT current_count FROM room_status WHERE id = 1");
 $status = $stmt_ppl->fetch();
 $current_people = isset($status['current_count']) ? (int)$status['current_count'] : 0;
 
-// 3. 本の人気ランキング (TOP 5)
-// books テーブル: title, pickup_count(INT)
-$stmt_books = $pdo->query("SELECT title, pickup_count FROM books ORDER BY pickup_count DESC LIMIT 5");
+// 3. 本の人気ランキング (IDも取得するように変更)
+$stmt_books = $pdo->query("SELECT id, title, pickup_count FROM books ORDER BY pickup_count DESC LIMIT 5");
 $ranking = $stmt_books->fetchAll();
 
 ?>
@@ -43,11 +51,10 @@ $ranking = $stmt_books->fetchAll();
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>図書室スマート管理システム</title>
     <style>
-        /* シンプルで見やすいCSSデザイン */
+        /* デザインは以前のまま */
         body { font-family: 'Helvetica Neue', Arial, sans-serif; background-color: #f0f2f5; color: #333; margin: 0; padding: 20px; }
         h1 { text-align: center; color: #2c3e50; margin-bottom: 30px; }
         
-        /* カードレイアウト */
         .container { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; max-width: 1200px; margin: 0 auto; }
         .card { background: white; border-radius: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); padding: 20px; width: 300px; text-align: center; transition: transform 0.2s; }
         .card:hover { transform: translateY(-5px); }
@@ -56,18 +63,29 @@ $ranking = $stmt_books->fetchAll();
         .value { font-size: 3em; font-weight: bold; color: #2c3e50; margin: 10px 0; }
         .unit { font-size: 0.4em; color: #95a5a6; }
         
-        /* ステータス別の色変化 */
         .status-good { color: #27ae60; font-weight: bold; }
         .status-warn { color: #e67e22; font-weight: bold; }
         .status-alert { color: #c0392b; font-weight: bold; }
 
-        /* ランキングリスト */
         ul.ranking { list-style: none; padding: 0; text-align: left; }
-        ul.ranking li { padding: 8px 0; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; }
+        ul.ranking li { padding: 8px 0; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
         ul.ranking li:last-child { border-bottom: none; }
         .rank-num { font-weight: bold; color: #3498db; margin-right: 10px; }
 
-        /* メンテナンス用エリア */
+        /* 【追加】リセットボタン用のスタイル */
+        .btn-reset-mini {
+            background-color: #e74c3c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-size: 0.7em;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+        .btn-reset-mini:hover { background-color: #c0392b; }
+        .ranking-right { display: flex; align-items: center; }
+
         .admin-area { margin-top: 50px; text-align: center; padding: 20px; border-top: 1px dashed #ccc; font-size: 0.9em; color: #777; }
         .admin-area input[type="number"] { width: 50px; padding: 5px; }
         .admin-area button { padding: 5px 10px; cursor: pointer; background: #95a5a6; color: white; border: none; border-radius: 4px; }
@@ -88,7 +106,7 @@ $ranking = $stmt_books->fetchAll();
                 </div>
                 <?php
                     $temp = $env['temperature'];
-                    if ($temp >= 18 && $temp <= 28) {
+                    if ($temp >= 18 && $temp <= 25) {
                         echo '<p class="status-good">快適な温度です ◎</p>';
                     } elseif ($temp < 18) {
                         echo '<p class="status-alert">少し寒いです 🥶</p>';
@@ -106,7 +124,7 @@ $ranking = $stmt_books->fetchAll();
             <h2>👥 現在の利用者数</h2>
             <div class="value"><?= $current_people ?><span class="unit">人</span></div>
             
-            <?php if ($current_people <= 5): ?>
+            <?php if ($current_people <= 10): ?>
                 <p class="status-good">空いています ◎</p>
             <?php elseif ($current_people <= 20): ?>
                 <p class="status-warn">やや混雑しています △</p>
@@ -125,7 +143,14 @@ $ranking = $stmt_books->fetchAll();
                                 <span class="rank-num"><?= $idx + 1 ?>.</span>
                                 <?= htmlspecialchars($book['title'], ENT_QUOTES, 'UTF-8') ?>
                             </span>
-                            <span><?= $book['pickup_count'] ?>回</span>
+                            
+                            <div class="ranking-right">
+                                <span><?= $book['pickup_count'] ?>回</span>
+                                <form method="POST" style="margin:0;">
+                                    <input type="hidden" name="reset_book_id" value="<?= $book['id'] ?>">
+                                    <button type="submit" class="btn-reset-mini" onclick="return confirm('リセットしますか？')">クリア</button>
+                                </form>
+                            </div>
                         </li>
                     <?php endforeach; ?>
                 </ul>
@@ -150,7 +175,7 @@ $ranking = $stmt_books->fetchAll();
     <script>
         setTimeout(function(){
             window.location.reload();
-        }, 30000);
+        }, 30000); // 30秒自動更新
     </script>
 
 </body>
